@@ -22,6 +22,7 @@ Uso:
 Output: data/processed/regime_features_daily.parquet
 """
 
+import argparse
 import os
 
 import numpy as np
@@ -204,23 +205,49 @@ def build_onchain_features(netflow: pd.DataFrame, staking: pd.DataFrame,
 # ---------------------------------------------------------------------------
 
 def main():
+    parser = argparse.ArgumentParser(description="Costruisce le feature per il regime score")
+    parser.add_argument("--symbol", default="eth", choices=["eth", "btc"],
+                         help="Simbolo da processare. 'btc' esclude automaticamente le feature "
+                              "on-chain (netflow/staking/TVL/gas), specifiche di Ethereum -- "
+                              "usato per il test cross-asset di validazione della logica di trend.")
+    args = parser.parse_args()
+    symbol = args.symbol
+
+    # Su ETH manteniamo i nomi file originali (retrocompatibilita' con tutto
+    # il lavoro gia' fatto finora); su BTC usiamo un suffisso dedicato.
+    suffix = "" if symbol == "eth" else f"_{symbol}"
+    output_path = os.path.join(PROCESSED_DIR, f"regime_features_daily{suffix}.parquet")
+
     os.makedirs(PROCESSED_DIR, exist_ok=True)
 
-    print("Caricamento dati grezzi...")
-    ohlcv_1d = to_daily_date(load_parquet(os.path.join("ohlcv", "eth_usdt_1d.parquet")))
-    funding = to_daily_date(load_parquet(os.path.join("derivatives", "funding", "eth_usdt_funding.parquet")), agg="mean")
-    oi = to_daily_date(load_parquet(os.path.join("derivatives", "open_interest", "eth_usdt_oi.parquet")), agg="mean")
-    netflow = to_daily_date(load_parquet(os.path.join("onchain", "eth_netflow_daily.parquet")))
-    staking = to_daily_date(load_parquet(os.path.join("onchain", "staking_flow_daily.parquet")))
-    gas = to_daily_date(load_parquet(os.path.join("onchain", "gas_fee_daily.parquet")))
-    tvl_frames = {
-        "arbitrum": to_daily_date(load_parquet(os.path.join("onchain", "l2_tvl_arbitrum.parquet"))),
-        "base": to_daily_date(load_parquet(os.path.join("onchain", "l2_tvl_base.parquet"))),
-        "optimism": to_daily_date(load_parquet(os.path.join("onchain", "l2_tvl_optimism.parquet"))),
-    }
+    print(f"Caricamento dati grezzi per {symbol.upper()}...")
+    ohlcv_1d = to_daily_date(load_parquet(os.path.join("ohlcv", f"{symbol}_usdt_1d.parquet")))
+    funding = to_daily_date(load_parquet(os.path.join("derivatives", "funding", f"{symbol}_usdt_funding.parquet")), agg="mean")
+    oi = to_daily_date(load_parquet(os.path.join("derivatives", "open_interest", f"{symbol}_usdt_oi.parquet")), agg="mean")
+
+    if symbol == "eth":
+        netflow = to_daily_date(load_parquet(os.path.join("onchain", "eth_netflow_daily.parquet")))
+        staking = to_daily_date(load_parquet(os.path.join("onchain", "staking_flow_daily.parquet")))
+        gas = to_daily_date(load_parquet(os.path.join("onchain", "gas_fee_daily.parquet")))
+        tvl_frames = {
+            "arbitrum": to_daily_date(load_parquet(os.path.join("onchain", "l2_tvl_arbitrum.parquet"))),
+            "base": to_daily_date(load_parquet(os.path.join("onchain", "l2_tvl_base.parquet"))),
+            "optimism": to_daily_date(load_parquet(os.path.join("onchain", "l2_tvl_optimism.parquet"))),
+        }
+    else:
+        # BTC non ha staking, L2, o netflow ETH-style raccolto in questa
+        # pipeline -- il regime score si adattera' automaticamente usando
+        # solo trend+derivatives (vedi ri-normalizzazione pesi in regime_score.py)
+        print("Simbolo BTC: nessuna feature on-chain disponibile in questa pipeline "
+              "(staking/L2/netflow sono concetti specifici di Ethereum) -- il regime "
+              "score user\u00e0 solo trend+derivatives, con i pesi ri-normalizzati di conseguenza.")
+        netflow = pd.DataFrame()
+        staking = pd.DataFrame()
+        gas = pd.DataFrame()
+        tvl_frames = {}
 
     if ohlcv_1d.empty:
-        print("ERRORE: OHLCV daily ETH non trovato -- e' la spina dorsale della griglia, impossibile continuare.")
+        print(f"ERRORE: OHLCV daily {symbol.upper()} non trovato -- e' la spina dorsale della griglia, impossibile continuare.")
         return
 
     print("Costruzione feature di trend (EMA, ADX)...")
@@ -240,9 +267,9 @@ def main():
         result = result.merge(onchain, on="date", how="left")
 
     result = result.sort_values("date").reset_index(drop=True)
-    result.to_parquet(OUTPUT_PATH, index=False)
+    result.to_parquet(output_path, index=False)
 
-    print(f"\nSalvato: {len(result)} righe, {len(result.columns)} colonne in {OUTPUT_PATH}")
+    print(f"\nSalvato: {len(result)} righe, {len(result.columns)} colonne in {output_path}")
     print(f"Periodo: {result['date'].min()} -> {result['date'].max()}")
 
     print("\nCopertura dati per colonna (% di righe non-NaN, utile per capire da quando ogni feature e' realmente utilizzabile):")

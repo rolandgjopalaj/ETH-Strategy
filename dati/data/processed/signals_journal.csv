@@ -1,0 +1,2 @@
+timestamp_generazione,date_segnale,action,reason,close_price,regime_score,n_categorie_disponibili
+2026-08-29T13:11:40.452582+00:00,2026-08-28 00:00:00+00:00,NESSUNA AZIONE,"Resta fuori dal mercato. regime_score=87.6, bull_regime=True, categorie disponibili=4",2507.45,87.60742642073099,4

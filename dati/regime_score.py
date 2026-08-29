@@ -25,6 +25,7 @@ Uso:
 Output: data/processed/regime_score_daily.parquet
 """
 
+import argparse
 import os
 
 import numpy as np
@@ -71,8 +72,11 @@ def score_derivatives(df: pd.DataFrame) -> pd.Series:
     """
     Persistenza del funding positivo (long crowded ma sostenuto = bullish).
     Gia' in [0,1] per costruzione (e' una frazione), nessuna trasformazione
-    necessaria.
+    necessaria. Se la colonna non esiste, ritorna NaN (categoria non
+    disponibile, gestita dalla ri-normalizzazione dei pesi).
     """
+    if "funding_positive_share_14d" not in df.columns:
+        return pd.Series(np.nan, index=df.index)
     return clip01(df["funding_positive_share_14d"])
 
 
@@ -83,13 +87,25 @@ def score_onchain(df: pd.DataFrame) -> pd.Series:
       - netflow: NEGATIVO e' bullish (ETH esce dagli exchange = accumulo)
       - staking: POSITIVO e' bullish (piu' si stakea, piu' fiducia/accumulo)
       - TVL L2:  crescita POSITIVA e' bullish (attivita' di rete in aumento)
-    """
-    netflow_bull = clip01(-df["netflow_zscore_30d"] / 2 + 0.5)
-    staking_bull = clip01(df["staking_zscore_30d"] / 2 + 0.5)
-    tvl_bull = clip01(df["tvl_l2_growth_pct_30d"] / 20 + 0.5)  # 20% crescita 30d = score pieno
 
-    components = pd.concat([netflow_bull, staking_bull, tvl_bull], axis=1)
-    return components.mean(axis=1, skipna=True)
+    Se nessuna di queste colonne esiste (es. per BTC, che non ha staking/L2
+    in questa pipeline), ritorna una serie di soli NaN -- non e' un errore,
+    e' esattamente come deve comportarsi una categoria "non disponibile" nel
+    sistema di ri-normalizzazione dei pesi.
+    """
+    onchain_cols = ["netflow_zscore_30d", "staking_zscore_30d", "tvl_l2_growth_pct_30d"]
+    if not any(col in df.columns for col in onchain_cols):
+        return pd.Series(np.nan, index=df.index)
+
+    components = []
+    if "netflow_zscore_30d" in df.columns:
+        components.append(clip01(-df["netflow_zscore_30d"] / 2 + 0.5))
+    if "staking_zscore_30d" in df.columns:
+        components.append(clip01(df["staking_zscore_30d"] / 2 + 0.5))
+    if "tvl_l2_growth_pct_30d" in df.columns:
+        components.append(clip01(df["tvl_l2_growth_pct_30d"] / 20 + 0.5))
+
+    return pd.concat(components, axis=1).mean(axis=1, skipna=True)
 
 
 def build_composite_score(df: pd.DataFrame) -> pd.DataFrame:
@@ -134,20 +150,28 @@ def build_composite_score(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def main():
-    if not os.path.exists(INPUT_PATH):
-        print(f"ERRORE: {INPUT_PATH} non trovato. Esegui prima build_features.py")
+    parser = argparse.ArgumentParser(description="Costruisce il regime score composito")
+    parser.add_argument("--symbol", default="eth", choices=["eth", "btc"])
+    args = parser.parse_args()
+    suffix = "" if args.symbol == "eth" else f"_{args.symbol}"
+
+    input_path = os.path.join("data", "processed", f"regime_features_daily{suffix}.parquet")
+    output_path = os.path.join("data", "processed", f"regime_score_daily{suffix}.parquet")
+
+    if not os.path.exists(input_path):
+        print(f"ERRORE: {input_path} non trovato. Esegui prima build_features.py --symbol {args.symbol}")
         return
 
     print("Caricamento feature...")
-    df = pd.read_parquet(INPUT_PATH)
+    df = pd.read_parquet(input_path)
 
     print("Costruzione regime score composito...")
     result = build_composite_score(df)
 
-    os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
-    result.to_parquet(OUTPUT_PATH, index=False)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    result.to_parquet(output_path, index=False)
 
-    print(f"\nSalvato: {len(result)} righe in {OUTPUT_PATH}")
+    print(f"\nSalvato: {len(result)} righe in {output_path}")
 
     # Report riassuntivo: quanto tempo il sistema segnala bull regime, e con
     # quale livello medio di conferma
