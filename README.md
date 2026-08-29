@@ -70,3 +70,5 @@ data/raw/
 
 `sanity_check.py` (senza `--file`) scansiona automaticamente tutte e tre le
 categorie e riporta i risultati raggruppati per sezione.
+
+export DUNE_API_KEY="PpNgPSa0I2oxbdkmNHzy8au4FosLIxBq"
